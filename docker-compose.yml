@@ -1,0 +1,26 @@
+services:
+  bureau-bot:
+    build: .
+    env_file:
+      - .env
+    environment:
+      - TZ=America/Montreal
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "https://slack.com"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    labels:
+      - autoheal=true
+
+  autoheal:
+    image: willfarrell/autoheal
+    restart: always
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - AUTOHEAL_CONTAINER_LABEL=autoheal
