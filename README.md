@@ -85,7 +85,3 @@ bureau-bot/
 ## Données
 
 Les présences sont stockées dans `./data/presence.db` (SQLite), persisté via un volume Docker.
-
-## Licence
-
-MIT
