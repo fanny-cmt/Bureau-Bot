@@ -39,10 +39,10 @@ Clone le repo et crée un fichier `.env` à la racine :
 SLACK_BOT_TOKEN=xoxb-...
 SLACK_SIGNING_SECRET=...
 SLACK_APP_TOKEN=xapp-...
-SLACK_CHANNEL_ID=C0XXXXXXXXX
+SLACK_CHANNEL_IDS=C0XXXXXXXXX,C0YYYYYYYYY
 ```
 
-> Pour trouver le `SLACK_CHANNEL_ID` : clic droit sur le canal dans Slack → **Voir les infos du canal** → l'ID est en bas (commence par `C`)
+> Pour trouver un `SLACK_CHANNEL_ID` : clic droit sur le canal dans Slack → **Voir les infos du canal** → l'ID est en bas (commence par `C`). Sépare plusieurs IDs par des virgules pour publier dans plusieurs channels.
 
 ## Lancement
 
