@@ -187,6 +187,25 @@ function buildFrozenBlocks(week) {
   ];
 }
 
+const RETRY_ATTEMPTS = 3;
+const RETRY_DELAY_MS = 30_000;
+
+async function retryAsync(fn, label) {
+  let lastErr;
+  for (let attempt = 1; attempt <= RETRY_ATTEMPTS; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      console.error(`Échec ${label} (tentative ${attempt}/${RETRY_ATTEMPTS}) : ${err.message}`);
+      if (attempt < RETRY_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+      }
+    }
+  }
+  throw lastErr;
+}
+
 async function postWeeklyMessage(week) {
   const previous = db.prepare("SELECT channel, ts FROM messages WHERE week != ?").all(week);
   for (const prev of previous) {
@@ -198,26 +217,32 @@ async function postWeeklyMessage(week) {
   }
 
   for (const channel of CHANNEL_IDS) {
-    const presence = getPresence(week, channel);
-    const result = await app.client.chat.postMessage({
-      channel,
-      text: `Présences bureau — semaine du ${week}`,
-      blocks: buildBlocks(week, presence),
-    });
-
-    db.prepare("INSERT OR REPLACE INTO messages (week, channel, ts) VALUES (?, ?, ?)").run(
-      week,
-      channel,
-      result.ts,
-    );
-
     try {
-      await app.client.pins.add({ channel, timestamp: result.ts });
-    } catch (err) {
-      console.error(`Échec de l'épinglage : ${err.message}`);
-    }
+      await retryAsync(async () => {
+        const presence = getPresence(week, channel);
+        const result = await app.client.chat.postMessage({
+          channel,
+          text: `Présences bureau — semaine du ${week}`,
+          blocks: buildBlocks(week, presence),
+        });
 
-    console.log(`Message envoyé pour la semaine du ${week} dans ${channel}`);
+        db.prepare("INSERT OR REPLACE INTO messages (week, channel, ts) VALUES (?, ?, ?)").run(
+          week,
+          channel,
+          result.ts,
+        );
+
+        try {
+          await app.client.pins.add({ channel, timestamp: result.ts });
+        } catch (err) {
+          console.error(`Échec de l'épinglage : ${err.message}`);
+        }
+
+        console.log(`Message envoyé pour la semaine du ${week} dans ${channel}`);
+      }, `envoi dans ${channel}`);
+    } catch (err) {
+      console.error(`Abandon envoi dans ${channel} : ${err.message}`);
+    }
   }
 }
 
@@ -289,14 +314,60 @@ function getNextSendDate() {
   return sendDate;
 }
 
+// Intended send date for the current calendar week (may be in the past, unlike getNextSendDate)
+function getThisWeekSendDate() {
+  const now = new Date();
+  const dayOfWeek = now.getDay();
+  let daysToFriday;
+  if (dayOfWeek === 0) daysToFriday = -2; // Dimanche -> vendredi précédent
+  else if (dayOfWeek === 6) daysToFriday = -1; // Samedi -> vendredi précédent
+  else daysToFriday = 5 - dayOfWeek; // Lun-Ven -> vendredi de cette semaine
+
+  const friday = new Date(now);
+  friday.setDate(now.getDate() + daysToFriday);
+  friday.setHours(9, 0, 0, 0);
+
+  const sendDate = new Date(friday);
+  while (isPublicHoliday(sendDate) || sendDate.getDay() === 0 || sendDate.getDay() === 6) {
+    sendDate.setDate(sendDate.getDate() - 1);
+  }
+  sendDate.setHours(9, 0, 0, 0);
+  return sendDate;
+}
+
+async function catchUpSendIfNeeded() {
+  const thisWeekSendDate = getThisWeekSendDate();
+  const now = new Date();
+  if (now < thisWeekSendDate) return;
+
+  const targetMonday = new Date(thisWeekSendDate);
+  const daysToMonday = ((1 - targetMonday.getDay() + 7) % 7) || 7;
+  targetMonday.setDate(targetMonday.getDate() + daysToMonday);
+  const targetWeek = targetMonday.toISOString().split("T")[0];
+
+  // Skip if the target cycle has already started — nextWeek() no longer refers to this send
+  if (targetWeek !== nextWeek()) return;
+
+  const exists = db.prepare("SELECT 1 FROM messages WHERE week = ? LIMIT 1").get(targetWeek);
+  if (exists) return;
+
+  console.log(`Rattrapage : envoi du message pour la semaine du ${targetWeek} (prévu ${thisWeekSendDate.toISOString()})`);
+  await postWeeklyMessage(targetWeek);
+}
+
 function scheduleNextMessage() {
   const now = new Date();
   const sendDate = getNextSendDate();
   const ms = sendDate - now;
   console.log(`Prochain message prévu : ${sendDate.toISOString()} (dans ${Math.round(ms / 1000 / 60)} min)`);
   setTimeout(async () => {
-    await postWeeklyMessage(nextWeek());
-    scheduleNextMessage();
+    try {
+      await postWeeklyMessage(nextWeek());
+    } catch (err) {
+      console.error(`Erreur inattendue lors de l'envoi hebdomadaire : ${err.message}`);
+    } finally {
+      scheduleNextMessage();
+    }
   }, ms);
 }
 
@@ -309,9 +380,9 @@ function getNextFreezeDate() {
   const friday = new Date(now);
   const daysUntilFriday = (5 - dayOfWeek + 7) % 7;
   friday.setDate(now.getDate() + daysUntilFriday);
-  friday.setHours(17, 0, 0, 0);
+  friday.setHours(15, 30, 0, 0);
 
-  // If we're past Friday 17h, jump to next week
+  // If we're past Friday 15h30, jump to next week
   if (friday <= now) {
     friday.setDate(friday.getDate() + 7);
   }
@@ -322,7 +393,7 @@ function getNextFreezeDate() {
     freezeDate.setDate(freezeDate.getDate() - 1);
   }
 
-  freezeDate.setHours(17, 0, 0, 0);
+  freezeDate.setHours(15, 30, 0, 0);
   return freezeDate;
 }
 
@@ -332,8 +403,13 @@ function scheduleFreezeMessage() {
   const ms = freezeDate - now;
   console.log(`Gel du message prévu : ${freezeDate.toISOString()} (dans ${Math.round(ms / 1000 / 60)} min)`);
   setTimeout(async () => {
-    await freezeCurrentMessage(app.client);
-    scheduleFreezeMessage();
+    try {
+      await freezeCurrentMessage(app.client);
+    } catch (err) {
+      console.error(`Erreur inattendue lors du gel : ${err.message}`);
+    } finally {
+      scheduleFreezeMessage();
+    }
   }, ms);
 }
 
@@ -343,28 +419,39 @@ async function freezeCurrentMessage(client) {
   if (messages.length === 0) return;
 
   for (const msg of messages) {
-    await client.chat.update({
-      channel: msg.channel,
-      ts: msg.ts,
-      text: `Présences bureau — semaine du ${week} (terminé)`,
-      blocks: buildFrozenBlocks(week),
-    });
-
     try {
-      await client.pins.remove({ channel: msg.channel, timestamp: msg.ts });
-    } catch (err) {
-      console.error(`Échec du désépinglage : ${err.message}`);
-    }
+      await retryAsync(async () => {
+        await client.chat.update({
+          channel: msg.channel,
+          ts: msg.ts,
+          text: `Présences bureau — semaine du ${week} (terminé)`,
+          blocks: buildFrozenBlocks(week),
+        });
 
-    db.prepare("DELETE FROM presence WHERE week = ? AND channel = ?").run(week, msg.channel);
-    db.prepare("DELETE FROM messages WHERE week = ? AND channel = ?").run(week, msg.channel);
-    console.log(`Message de la semaine du ${week} figé dans ${msg.channel}`);
+        try {
+          await client.pins.remove({ channel: msg.channel, timestamp: msg.ts });
+        } catch (err) {
+          console.error(`Échec du désépinglage : ${err.message}`);
+        }
+
+        db.prepare("DELETE FROM presence WHERE week = ? AND channel = ?").run(week, msg.channel);
+        db.prepare("DELETE FROM messages WHERE week = ? AND channel = ?").run(week, msg.channel);
+        console.log(`Message de la semaine du ${week} figé dans ${msg.channel}`);
+      }, `gel dans ${msg.channel}`);
+    } catch (err) {
+      console.error(`Abandon gel dans ${msg.channel} : ${err.message}`);
+    }
   }
 }
 
 (async () => {
   await app.start();
   console.log("Bureau Bot démarré en Socket Mode");
+  try {
+    await catchUpSendIfNeeded();
+  } catch (err) {
+    console.error(`Erreur rattrapage au démarrage : ${err.message}`);
+  }
   scheduleNextMessage();
   scheduleFreezeMessage();
 })();
