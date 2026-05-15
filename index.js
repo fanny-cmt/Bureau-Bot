@@ -125,10 +125,9 @@ function isPublicHoliday(date) {
 // Returns a Set of day names (e.g. "Lundi") that are public holidays for the given week
 function getHolidaysForWeek(weekMonday) {
   const holidays = new Set();
-  const monday = new Date(weekMonday);
+  const [year, month, day] = weekMonday.split("-").map(Number);
   for (let i = 0; i < 5; i++) {
-    const date = new Date(monday);
-    date.setDate(monday.getDate() + i);
+    const date = new Date(year, month - 1, day + i);
     if (isPublicHoliday(date)) {
       holidays.add(DAYS[i]);
     }
