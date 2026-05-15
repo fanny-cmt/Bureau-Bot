@@ -31,6 +31,30 @@ const PRIVATE_QC_HOLIDAYS = new Set([
   "Christmas Day",
 ]);
 
+const LONELY_TAGS = [
+  "seul·e contre le monde",
+  "Robinson du bureau",
+  "Highlander : il n'en restera qu'un",
+  "Tom Hanks dans Seul au monde",
+  "main character du jour",
+  "captain solo",
+  "the chosen one",
+  "dernier·e des Mohicans",
+  "boss final",
+  "Han Solo, sans Chewbacca",
+  "DJ exclusif du open space",
+  "président·e du fan club de la machine à café",
+];
+
+function pickLonelyTag(week, day) {
+  const seed = `${week}-${day}`;
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) {
+    hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+  }
+  return LONELY_TAGS[hash % LONELY_TAGS.length];
+}
+
 // Init DB
 db.exec(`
   CREATE TABLE IF NOT EXISTS presence (
@@ -160,7 +184,11 @@ function buildBlocks(week, presence) {
       return `*${day}* : _Férié_`;
     }
     const users = presence[day];
-    return `*${day}* : ${users.length > 0 ? users.map((u) => `<@${u}>`).join(", ") : "—"}`;
+    if (users.length === 0) return `*${day}* : —`;
+    if (users.length === 1) {
+      return `*${day}* : <@${users[0]}> — _${pickLonelyTag(week, day)}_`;
+    }
+    return `*${day}* : ${users.map((u) => `<@${u}>`).join(", ")}`;
   }).join("\n");
 
   return [
