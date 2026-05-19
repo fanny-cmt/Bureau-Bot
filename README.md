@@ -4,11 +4,16 @@ Un bot Slack qui permet à une équipe de coordonner sa présence au bureau chaq
 
 ## Fonctionnalités
 
-- Message automatique chaque vendredi matin dans un canal dédié à 9h
+- Message automatique à 9h le dernier jour ouvré de la semaine (vendredi par défaut, anticipé si férié au Québec) dans un ou plusieurs canaux
 - Boutons interactifs par jour (Lundi → Vendredi), sans formulaire à soumettre
+- Jours fériés québécois affichés en rouge et non-cliquables
 - Récap mis à jour en temps réel — tout le monde voit qui vient quel jour
 - Modifiable en tout temps
-- Message de la semaine en cours (à la fin de la semaine) désactivé le vendredi à 17h et les données sont flushées
+- Message épinglé automatiquement dans chaque canal, désépinglé à la clôture
+- Tag humoristique attribué à une personne seule sur un jour
+- Retry automatique (3 tentatives, 30 s d'écart) en cas d'échec d'envoi à Slack
+- Rattrapage au démarrage : si le bot était hors ligne au moment de l'envoi prévu, il publie au boot
+- Le vendredi à 15h30, le message de la semaine est gelé (boutons retirés) et les présences flushées
 
 ## Architecture
 
@@ -24,7 +29,7 @@ Un bot Slack qui permet à une équipe de coordonner sa présence au bureau chaq
 ## Configuration de l'app Slack
 
 1. Crée une nouvelle app → **From scratch**
-2. **OAuth & Permissions** → ajoute les scopes : `chat:write`, `channels:read`
+2. **OAuth & Permissions** → ajoute les scopes : `chat:write`, `channels:read`, `pins:write`
 3. **Install to Workspace** → copie le **Bot Token** (`xoxb-...`)
 4. **Basic Information** → copie le **Signing Secret**
 5. **Socket Mode** → active → génère un **App Token** (`xapp-...`)
@@ -63,14 +68,6 @@ Invite le bot dans ton canal :
 /invite @BureauBot
 ```
 
-## Test immédiat
-
-Pour poster un message sans attendre vendredi, ajoute temporairement cette ligne dans `index.js` avant la dernière ligne `})();` :
-
-```javascript
-await postOrUpdateMessage(nextWeek());
-```
-
 ## Structure du projet
 
 ```
@@ -84,4 +81,4 @@ bureau-bot/
 
 ## Données
 
-Les présences sont stockées dans `./data/presence.db` (SQLite), persisté via un volume Docker.
+Les présences sont stockées dans `./data/bureau.db` (SQLite, mode WAL), persisté via un volume Docker. Deux tables : `presence` (user × semaine × jour × canal) et `messages` (référence du message Slack par semaine et canal, pour update et désépinglage).
